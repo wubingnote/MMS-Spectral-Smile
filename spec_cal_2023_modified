@@ -1,0 +1,113 @@
+pro spec_cal_2023_modified
+  print,'Started at:'+systime()
+  !EXCEPT=0
+
+  a=''
+
+  ;光谱范围，分辨率*******
+  bin=1.0
+  wlen1=1700.0
+  wlen2=2300.0
+  n_bin=round((wlen2-wlen1)/bin)+1
+  wlens=findgen(n_bin)*bin+wlen1
+
+  ;CO2透过率*******
+  file_trans='C:\Users\15747\OneDrive\Desktop\cx\2021-03-28_profile_trans_1p0-3p51.csv'
+  trans_csv=read_csv(file_trans)
+  trans=trans_csv.(1)
+
+  file_rad='C:\Users\15747\OneDrive\Desktop\cx\NewGuey2003_300-3500_1nm.csv'
+  rad_csv=read_csv(file_rad)
+  rad=rad_csv.(1)*1000.0
+
+  ;选择的用于检测的波长区间*******
+  wlen_min=1800.0
+  wlen_max=2200.0
+
+  ;读取设置偏移和FWHM变化前的中心波长和FWHM*******
+  file1='C:\Users\15747\OneDrive\Desktop\cx\红外波长.csv'
+  print,file1
+  band_csv=read_csv(file1)
+  band_center=band_csv.(0)
+  band_fwhm=band_csv.(1)
+
+  ;设置波长和波段
+  index_min=min(where(band_center ge wlen_min))
+  index_max=max(where(band_center le wlen_max))
+  print,'采用的波段号范围：',strtrim(string(index_min),2),', ',strtrim(string(index_max),2)
+
+  band_rad=make_array(index_max-index_min+1,/float)
+
+  ;全局变量定义
+  ;defsysv,'!tmp_nb',img_nb
+  defsysv,'!tmp_index_min',index_min
+  defsysv,'!tmp_index_max',index_max
+  defsysv,'!tmp_band_center',band_center
+  defsysv,'!tmp_band_fwhm',band_fwhm
+  defsysv,'!tmp_trans',trans[(wlen1-1000.0)/bin:(wlen2-1000.0)/bin]
+  defsysv,'!tmp_wlens',wlens
+  defsysv,'!band_rad',band_rad
+  defsysv,'!tmp_rad',rad[(wlen1-1000.0)/bin:(wlen2-1000.0)/bin]
+
+  ;读取图像数据（待检测数据）*******
+  img_ns=25
+  center=make_array(img_ns,/float)
+  ;读取图像数据
+  file2='C:\Users\15747\OneDrive\Desktop\cx\HX1-Or_GRAS_MMS-D-26-N_SCI_N_20210308054557_20210308055831_00009__bsq.dat'
+  r=hdr_file_query(file2,h_info=h_info2)
+  ns2=h_info2.ns
+  nl2=h_info2.nl
+  nb2=h_info2.nb
+  data2=float(read_hdr_file(file2,h_info2.interleave,h_info2.data_type,ns2,nl2,nb2))
+
+  ns=ns2
+
+  bin=0.1
+
+  dx=make_array(2,ns2,/float)
+
+  n_center=(16.0+16.0)/bin+1
+  n_fwhm=(16.0+1)/bin+1
+
+  X0=findgen(n_center)*bin-16.0
+  X1=findgen(n_fwhm)*bin-1.0
+
+  cost=make_array(n_center,n_fwhm,value=1000,/float)
+
+  for sample=0,ns-1 do begin
+    ;设置单条待检测光谱*******
+    img_slice=mean(reform(data2[sample,550:700,*]),dimension=1)
+
+    cost[*,*]=1000.0
+
+    defsysv,'!tmp_spectrum',img_slice
+
+    for ii=0,n_center-1 do begin
+      for jj=0,n_fwhm-1 do begin
+        ;计算波段辐射亮度
+        for k=!tmp_index_min,!tmp_index_max do begin
+          rsp=exp(-(!tmp_wlens-!tmp_band_center[k]-X0[ii])^2/(2*((!tmp_band_fwhm[k]+X1[jj])/2.35482)^2))
+          !band_rad[k-!tmp_index_min]=total(rsp*!tmp_rad*!tmp_trans/!PI/2.25*cos(54.0/180.0*!PI))/total(rsp)
+        endfor
+        ;plot,!band_rad
+        ;plot,!tmp_band_center,img_slice,color=255
+        ;平滑度
+        value=sqrt(mean(((img_slice[!tmp_index_min:!tmp_index_max]/!band_rad)-$
+          smooth(img_slice[!tmp_index_min:!tmp_index_max]/!band_rad,9,/EDGE_TRUNCATE))^2))
+        cost[ii,jj]=value
+
+      endfor
+      ;print,ii
+    endfor
+    cost_min=min(cost,index)
+    dx[*,sample]=[X0[index mod n_center],X1[fix(index/n_center)]]
+    print,sample,dx[*,sample]
+    tvscl,cost
+  endfor
+  file3=file_dirname(file2)+'\'+file_basename(file2,'.csv')+'_dx.csv'
+  write_csv,file3,dx,header=['delta_lambda','delta_fwhm']
+  print,'输出结果文件：',file3
+
+
+  print,'Ended at:'+systime()
+end
